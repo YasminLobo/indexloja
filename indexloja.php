@@ -18,135 +18,10 @@ if (!isset($_SESSION['ID_cliente'])) {
     $_SESSION['ID_cliente'] = 1;
 }
 
-// Handle search
-$search_query = isset($_GET['search']) ? trim($_GET['search']) : '';
-$search_condition = '';
-if (!empty($search_query)) {
-    $search_condition = " AND p.marca LIKE '%" . $conn->real_escape_string($search_query) . "%'";
-}
-
-// Handle adding to cart
-if (isset($_POST['add_to_cart'])) {
-    $ID_produto = $_POST['ID_produto'];
-    $ID_cliente = $_SESSION['ID_cliente'];
-    
-    // Check stock
-    $stmt = $conn->prepare("SELECT estoque FROM tb_produtos WHERE ID_produto = ?");
-    $stmt->bind_param("i", $ID_produto);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $row = $result->fetch_assoc();
-    
-    if ($row && $row['estoque'] > 0) {
-        // Get or create a cart
-        $sql_cart = "SELECT ID_carrinho FROM tb_carrinho WHERE ID_cliente = ? AND data_criacao > NOW() - INTERVAL 1 DAY ORDER BY data_criacao DESC LIMIT 1";
-        $stmt_cart = $conn->prepare($sql_cart);
-        $stmt_cart->bind_param("i", $ID_cliente);
-        $stmt_cart->execute();
-        $result_cart = $stmt_cart->get_result();
-        $ID_carrinho = null;
-        
-        if ($result_cart->num_rows > 0) {
-            $row_cart = $result_cart->fetch_assoc();
-            $ID_carrinho = $row_cart['ID_carrinho'];
-        } else {
-            $sql_insert_cart = "INSERT INTO tb_carrinho (ID_cliente) VALUES (?)";
-            $stmt_insert_cart = $conn->prepare($sql_insert_cart);
-            $stmt_insert_cart->bind_param("i", $ID_cliente);
-            $stmt_insert_cart->execute();
-            $ID_carrinho = $conn->insert_id;
-            $stmt_insert_cart->close();
-        }
-        $stmt_cart->close();
-
-        // Add or update item in cart
-        if ($ID_carrinho) {
-            $sql_item = "INSERT INTO tb_itens_carrinho (ID_carrinho, ID_produto, quantidade)
-                        VALUES (?, ?, 1)
-                        ON DUPLICATE KEY UPDATE quantidade = quantidade + 1";
-            $stmt_item = $conn->prepare($sql_item);
-            $stmt_item->bind_param("ii", $ID_carrinho, $ID_produto);
-            $stmt_item->execute();
-            $stmt_item->close();
-
-            // Decrease stock
-            $sql_stock = "UPDATE tb_produtos SET estoque = estoque - 1 WHERE ID_produto = ?";
-            $stmt_stock = $conn->prepare($sql_stock);
-            $stmt_stock->bind_param("i", $ID_produto);
-            $stmt_stock->execute();
-            $stmt_stock->close();
-        }
-    }
-    $stmt->close();
-    header("Location: " . $_SERVER['REQUEST_URI']);
-    exit();
-}
-
-// Handle liking/unliking a product
-if (isset($_POST['toggle_like'])) {
-    $ID_produto = $_POST['ID_produto'];
-    $ID_cliente = $_SESSION['ID_cliente'];
-
-    $stmt = $conn->prepare("SELECT COUNT(*) FROM tb_curtidas WHERE ID_cliente = ? AND ID_produto = ?");
-    $stmt->bind_param("ii", $ID_cliente, $ID_produto);
-    $stmt->execute();
-    $liked = $stmt->get_result()->fetch_row()[0] > 0;
-    $stmt->close();
-
-    if ($liked) {
-        $stmt = $conn->prepare("DELETE FROM tb_curtidas WHERE ID_cliente = ? AND ID_produto = ?");
-    } else {
-        $stmt = $conn->prepare("INSERT INTO tb_curtidas (ID_cliente, ID_produto) VALUES (?, ?)");
-    }
-    $stmt->bind_param("ii", $ID_cliente, $ID_produto);
-    $stmt->execute();
-    $stmt->close();
-    header("Location: " . $_SERVER['REQUEST_URI']);
-    exit();
-}
-
-// Handle deleting an item from the cart
-if (isset($_POST['delete_item'])) {
-    $ID_item = $_POST['ID_item'];
-
-    $conn->begin_transaction();
-
-    try {
-        $stmt_get = $conn->prepare("SELECT ID_produto, quantidade FROM tb_itens_carrinho WHERE ID_item = ?");
-        $stmt_get->bind_param("i", $ID_item);
-        $stmt_get->execute();
-        $result_get = $stmt_get->get_result();
-        $item_data = $result_get->fetch_assoc();
-        $stmt_get->close();
-
-        if ($item_data) {
-            $ID_produto = $item_data['ID_produto'];
-            $quantidade = $item_data['quantidade'];
-
-            $stmt_delete = $conn->prepare("DELETE FROM tb_itens_carrinho WHERE ID_item = ?");
-            $stmt_delete->bind_param("i", $ID_item);
-            $stmt_delete->execute();
-            $stmt_delete->close();
-
-            $stmt_update = $conn->prepare("UPDATE tb_produtos SET estoque = estoque + ? WHERE ID_produto = ?");
-            $stmt_update->bind_param("ii", $quantidade, $ID_produto);
-            $stmt_update->execute();
-            $stmt_update->close();
-
-            $conn->commit();
-        } else {
-            $conn->rollback();
-        }
-    } catch (mysqli_sql_exception $exception) {
-        $conn->rollback();
-    }
-    header("Location: " . $_SERVER['REQUEST_URI']);
-    exit();
-}
-
-// Get product type filter
+// Handle search by type
 $selected_tipo_id = isset($_GET['tipo']) ? (int)$_GET['tipo'] : null;
 $selected_tipo_name = "Todos os Produtos";
+
 if ($selected_tipo_id) {
     $stmt_title = $conn->prepare("SELECT tipo FROM tb_tipo WHERE ID_tipo = ?");
     $stmt_title->bind_param("i", $selected_tipo_id);
@@ -163,7 +38,7 @@ if ($selected_tipo_id) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
+    <title>YSL</title>
     <link rel="stylesheet" href="https://www.w3schools.com/w3css/4/w3.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Montserrat:300,400,500,600,700">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -171,35 +46,6 @@ if ($selected_tipo_id) {
     <link rel="shortcut icon" href="redo.png" type="image/x-icon">
     <style>
         /* Estilos CSS existentes... */
-        
-        /* Novo estilo para a barra de pesquisa */
-        .search-container {
-            display: flex;
-            width: 100%;
-            max-width: 500px;
-            margin: 0 auto;
-        }
-        
-        .search-input {
-            flex-grow: 1;
-            padding: 10px 15px;
-            border: 1px solid #ddd;
-            border-radius: 4px 0 0 4px;
-            font-size: 16px;
-        }
-        
-        .search-button {
-            padding: 10px 20px;
-            background-color: #000;
-            color: white;
-            border: none;
-            border-radius: 0 4px 4px 0;
-            cursor: pointer;
-        }
-        
-        .search-button:hover {
-            background-color: #333;
-        }
         
         .logo-container {
             display: flex;
@@ -209,6 +55,29 @@ if ($selected_tipo_id) {
         .logo-img {
             height: 50px;
             margin-right: 10px;
+        }
+        
+        .type-search-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .type-search-select {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            min-width: 200px;
+        }
+        
+        .type-search-button {
+            padding: 10px 20px;
+            background-color: #000;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            margin-left: 10px;
+            cursor: pointer;
         }
     </style>
 </head>
@@ -220,11 +89,7 @@ if ($selected_tipo_id) {
         <div>
             <span>Bem-vindo à YSL</span>
         </div>
-        <div class="top-links">
-            <a href="#">Meus Pedidos</a>
-            <a href="#">Atendimento</a>
-            <a href="#">Lojas</a>
-        </div>
+       
     </div>
 </div>
 
@@ -233,17 +98,7 @@ if ($selected_tipo_id) {
     <div class="header-container">
         <div class="logo-container">
             <img src="ysl.png" alt="YSL Logo" class="logo-img">
-           
-        </div>
-        
-        <!-- Barra de Pesquisa -->
-        <div class="search-container">
-            <form action="index.php" method="GET" style="display: flex; width: 100%;">
-                <input type="text" name="search" class="search-input" placeholder="Pesquisar produtos..." value="<?php echo htmlspecialchars($search_query); ?>">
-                <button type="submit" class="search-button">
-                    <i class="fas fa-search"></i>
-                </button>
-            </form>
+          
         </div>
         
         <div class="user-actions">
@@ -259,6 +114,7 @@ if ($selected_tipo_id) {
     </div>
 </header>
 
+
 <!-- Main Navigation -->
 <nav class="main-nav">
     <div class="nav-container">
@@ -270,7 +126,7 @@ if ($selected_tipo_id) {
             $result_types = $stmt_types->get_result();
             
             if ($result_types->num_rows > 0) {
-                $all_active = (!$selected_tipo_id && empty($search_query)) ? 'active' : '';
+                $all_active = !$selected_tipo_id ? 'active' : '';
                 echo "<li><a href='?' class='$all_active'>Todos</a></li>";
 
                 while ($row_type = $result_types->fetch_assoc()) {
@@ -290,88 +146,21 @@ if ($selected_tipo_id) {
     <div class="container">
         <!-- Breadcrumb -->
         <div class="breadcrumb">
-            <a href="#">Home</a> > <a href="#">Categorias</a> > <span><?php 
-                if (!empty($search_query)) {
-                    echo "Resultados para: " . htmlspecialchars($search_query);
-                } else {
-                    echo $selected_tipo_name; 
-                }
-            ?></span>
-        </div>
-        
-        <!-- Filters -->
-        <div class="filters">
-            <div class="filter-group">
-                <select class="filter-select">
-                    <option>Ordenar por</option>
-                    <option>Mais vendidos</option>
-                    <option>Menor preço</option>
-                    <option>Maior preço</option>
-                    <option>Lançamentos</option>
-                </select>
-            </div>
-            
-            <div class="product-count">
-                <?php
-                $sql_count = "SELECT COUNT(*) as total FROM tb_produtos p WHERE 1=1";
-                $params = array();
-                $types = "";
-                
-                if ($selected_tipo_id) {
-                    $sql_count .= " AND p.ID_tipo = ?";
-                    $params[] = $selected_tipo_id;
-                    $types .= "i";
-                }
-                
-                if (!empty($search_query)) {
-                    $sql_count .= " AND p.marca LIKE ?";
-                    $params[] = "%" . $search_query . "%";
-                    $types .= "s";
-                }
-                
-                $stmt_count = $conn->prepare($sql_count);
-                if (!empty($params)) {
-                    $stmt_count->bind_param($types, ...$params);
-                }
-                
-                $stmt_count->execute();
-                $result_count = $stmt_count->get_result();
-                $row_count = $result_count->fetch_assoc();
-                $item_count = $row_count['total'];
-                $stmt_count->close();
-                
-                if (!empty($search_query)) {
-                    echo "<span>$item_count resultado(s) para \"" . htmlspecialchars($search_query) . "\"</span>";
-                } else {
-                    echo "<span>$item_count produto(s) em $selected_tipo_name</span>";
-                }
-                ?>
-            </div>
+            <a href="#">Home</a> > <a href="#">Categorias</a> > <span><?php echo $selected_tipo_name; ?></span>
         </div>
         
         <!-- Product Grid -->
         <div class="product-grid">
             <?php
             $sql_products = "SELECT p.ID_produto, p.marca, p.preco, p.imagem, p.estoque 
-                           FROM tb_produtos p WHERE 1=1";
-            $params = array();
-            $types = "";
-            
+                           FROM tb_produtos p";
             if ($selected_tipo_id) {
-                $sql_products .= " AND p.ID_tipo = ?";
-                $params[] = $selected_tipo_id;
-                $types .= "i";
-            }
-            
-            if (!empty($search_query)) {
-                $sql_products .= " AND p.marca LIKE ?";
-                $params[] = "%" . $search_query . "%";
-                $types .= "s";
+                $sql_products .= " WHERE p.ID_tipo = ?";
             }
 
             $stmt_products = $conn->prepare($sql_products);
-            if (!empty($params)) {
-                $stmt_products->bind_param($types, ...$params);
+            if ($selected_tipo_id) {
+                $stmt_products->bind_param("i", $selected_tipo_id);
             }
             
             $stmt_products->execute();
@@ -419,7 +208,7 @@ if ($selected_tipo_id) {
                     echo "</div>";
                 }
             } else {
-                echo "<p style='grid-column: 1/-1; text-align: center; padding: 40px;'>Nenhum produto encontrado" . (!empty($search_query) ? " para \"" . htmlspecialchars($search_query) . "\"" : "") . ".</p>";
+                echo "<p style='grid-column: 1/-1; text-align: center; padding: 40px;'>Nenhum produto encontrado nesta categoria.</p>";
             }
             $stmt_products->close();
             ?>
